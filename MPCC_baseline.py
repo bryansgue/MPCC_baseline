@@ -119,8 +119,9 @@ def main():
 
     # ── Initial state (14-dim: [p, v, q, ω, θ₀]) ───────────────────────
     #    Start at θ₀ = 0 (beginning of the path)
+    p0 = position_by_arc_length(0.0)          # start ON the path
     x = np.zeros((14, N_sim + 1), dtype=np.double)
-    x[:, 0] = [5, 0.0, 7,                       # position
+    x[:, 0] = [p0[0], p0[1], p0[2],             # position (on path)
                0.0, 0.0, 0.0,                   # velocity
                1, 0, 0, 0,                       # quaternion (identity)
                0.0, 0.0, 0.0,                    # angular velocity

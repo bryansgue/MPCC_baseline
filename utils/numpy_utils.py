@@ -87,6 +87,57 @@ def wrap_angle(angle: float) -> float:
     return (angle + math.pi) % (2 * math.pi) - math.pi
 
 
+def quat_error_numpy(q_real: np.ndarray, q_desired: np.ndarray) -> np.ndarray:
+    """Quaternion error:  q_err = q_real⁻¹ ⊗ q_desired  (NumPy).
+
+    Parameters
+    ----------
+    q_real    : ndarray (4,)  – current quaternion [qw, qx, qy, qz].
+    q_desired : ndarray (4,)  – desired quaternion [qw, qx, qy, qz].
+
+    Returns
+    -------
+    q_err : ndarray (4,)  – error quaternion [qw, qx, qy, qz].
+    """
+    norm_q = np.linalg.norm(q_real)
+    q_inv = np.array([q_real[0], -q_real[1], -q_real[2], -q_real[3]]) / norm_q
+
+    # Hamilton product  q_inv ⊗ q_desired
+    w1, x1, y1, z1 = q_inv
+    w2, x2, y2, z2 = q_desired
+    return np.array([
+        w1*w2 - x1*x2 - y1*y2 - z1*z2,
+        w1*x2 + x1*w2 + y1*z2 - z1*y2,
+        w1*y2 - x1*z2 + y1*w2 + z1*x2,
+        w1*z2 + x1*y2 - y1*x2 + z1*w2,
+    ])
+
+
+def quat_log_numpy(q: np.ndarray) -> np.ndarray:
+    """Quaternion logarithm:  Log(q) = 2·atan2(‖q_v‖, qw) · q_v / ‖q_v‖ (NumPy).
+
+    Safe at the identity (q_v → 0).
+
+    Parameters
+    ----------
+    q : ndarray (4,)  – unit quaternion [qw, qx, qy, qz].
+
+    Returns
+    -------
+    log_q : ndarray (3,)  – rotation vector (element of so(3)).
+    """
+    # Enforce positive scalar part (double cover)
+    if q[0] < 0:
+        q = -q
+    q_w = q[0]
+    q_v = q[1:]
+
+    norm_q_v = np.linalg.norm(q_v)
+    theta = math.atan2(norm_q_v, q_w)
+    safe_norm = norm_q_v + 1e-9
+    return 2.0 * q_v * theta / safe_norm
+
+
 def quaternion_hemisphere_correction(quats: np.ndarray) -> np.ndarray:
     """Ensure consecutive quaternions lie in the same hemisphere.
 

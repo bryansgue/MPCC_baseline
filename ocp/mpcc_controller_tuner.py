@@ -1,30 +1,24 @@
 """
-MPCC (Model Predictive Contouring Control) – strict formulation with
-symbolic trajectory interp    # Lag error: projection of e_t onto the tangent direction → 3-vector
-    e_lag    = dot(tangent, e_t) * tangent      # (t·e_t) · t  ∈ ℝ³
-    # Contouring error (component orthogonal to tangent)
-    P_ec = MX.eye(3) - tangent @ tangent.T
-    ec   = P_ec @ e_t                           # 3-vector ⊥ tangenton.
+MPCC controller with TUNABLE gains via acados runtime parameters.
 
-Key MPCC features:
-  • θ (arc-length progress) is an optimisation STATE   (x[13])
-  • v_θ (progress velocity) is an optimisation CONTROL (u[4])
-  • θ̇ = v_θ  (augmented dynamics)
-  • The reference is a **symbolic CasADi function of θ** so the solver
-    can differentiate through:
-        v_θ  →  θ̇=v_θ  →  θ  →  reference(θ)  →  error  →  cost
-    This enables true optimisation of the progress speed v_θ.
+This is a COPY of mpcc_controller.py modified so that all cost weights
+are declared as `model.p` (acados runtime parameters).  This allows
+changing the gains at runtime via `solver.set(stage, "p", gains_vec)`
+WITHOUT recompiling the C code — enabling fast bilevel optimisation.
 
-Augmented vectors
------------------
-  State   x ∈ ℝ¹⁴ = [p(3), v(3), q(4), ω(3), θ]
-  Control u ∈ ℝ⁵  = [T, τx, τy, τz, v_θ]
+Parameter vector  p ∈ ℝ¹⁷:
+    p[ 0: 3]  →  Q_ec   = [Q_ecx, Q_ecy, Q_ecz]     contouring error
+    p[ 3: 6]  →  Q_el   = [Q_elx, Q_ely, Q_elz]     lag error
+    p[ 6: 9]  →  Q_q    = [Q_qx,  Q_qy,  Q_qz]      quaternion log error
+    p[ 9:13]  →  U_mat  = [U_T,   U_tx,  U_ty, U_tz] control effort
+    p[13:16]  →  Q_omega= [Q_wx,  Q_wy,  Q_wz]       angular velocity
+    p[16]     →  Q_s                                   progress speed
 
-No runtime parameters — the reference comes from the symbolic θ interpolation.
+Original file: ocp/mpcc_controller.py  (UNTOUCHED)
 """
 
 import numpy as np
-from casadi import MX, dot, vertcat
+from casadi import MX, dot, vertcat, diag as casadi_diag
 from acados_template import AcadosOcp, AcadosOcpSolver
 
 from models.quadrotor_model import MASS
@@ -36,23 +30,16 @@ from utils.casadi_utils import (
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-#  Default cost weights
+#  Default cost weights  (same as mpcc_controller.py — used as initial values)
 # ──────────────────────────────────────────────────────────────────────────────
+N_PARAMS = 17   # total number of runtime parameters
 
-
-DEFAULT_Q_EC    = [10.0, 10.0, 10.0]            # Contouring error      [ex, ey, ez]
-DEFAULT_Q_EL    = [5.0, 5.0, 5.0]               # Lag error             [ex, ey, ez]
-DEFAULT_Q_Q     = [5.0, 5.0, 5.0]               # Quaternion log error  [roll, pitch, yaw]
-DEFAULT_U_MAT   = [0.1, 250.0, 250.0, 250.0]    # Control effort        [T, τx, τy, τz]
-DEFAULT_Q_OMEGA = [0.5, 0.5, 0.5]               # Angular velocity      [ωx, ωy, ωz]
-DEFAULT_Q_S     = 0.3                            # Progress: Q_s*(v_max-v_θ)²
-
-DEFAULT_Q_EC    = [15.28754095737987, 45.14088894570616, 45.1057597918723]
-DEFAULT_Q_EL    = [9.981522233473786, 4.025848920211256, 0.12224481497560617]
-DEFAULT_Q_Q     = [2.307877692394767, 1.1269813915717117, 1.3240809245877352]
-DEFAULT_U_MAT   = [0.015383100319095615, 28.473718721642047, 596.6862751213797, 61.37755986844395]
-DEFAULT_Q_OMEGA = [0.3783929014639194, 0.02224827030993484, 9.95637046382479]
-DEFAULT_Q_S     = 0.5098589879219063
+DEFAULT_Q_EC    = [22.00736091362432, 39.52929117895614, 41.351252481945046]
+DEFAULT_Q_EL    = [33.874832397312225, 40.30522170732158, 34.90225580204642]
+DEFAULT_Q_Q     = [49.68367341061377, 36.49395435837781, 16.803648807763942]
+DEFAULT_U_MAT   = [0.1, 550.0, 550.0, 550.0]
+DEFAULT_Q_OMEGA = [0.025650491345221405, 3.4126047002592546, 6.291153914894247]
+DEFAULT_Q_S     = 0.7891639770382975                         # Progress: Q_s*(v_max-v_θ)²
 
 G = 9.81
 DEFAULT_T_MAX      = 5 * G
@@ -63,70 +50,100 @@ DEFAULT_TAUZ_MAX   = 0.1                         # ← was 0.03
 DEFAULT_VTHETA_MIN = 0.0
 DEFAULT_VTHETA_MAX = 15.0
 
+
+def weights_to_param_vector(weights: dict | None = None) -> np.ndarray:
+    """Convert a weights dict to the p ∈ ℝ¹⁷ parameter vector.
+
+    Parameters
+    ----------
+    weights : dict or None
+        Optional overrides.  Keys match the DEFAULT_* names (lower-case):
+            'Q_ec', 'Q_el', 'Q_q', 'U_mat', 'Q_omega', 'Q_s'
+
+    Returns
+    -------
+    np.ndarray of shape (17,)
+    """
+    w = weights or {}
+    p = np.zeros(N_PARAMS)
+    p[0:3]   = w.get('Q_ec',    DEFAULT_Q_EC)
+    p[3:6]   = w.get('Q_el',    DEFAULT_Q_EL)
+    p[6:9]   = w.get('Q_q',     DEFAULT_Q_Q)
+    p[9:13]  = w.get('U_mat',   DEFAULT_U_MAT)
+    p[13:16] = w.get('Q_omega', DEFAULT_Q_OMEGA)
+    p[16]    = w.get('Q_s',     DEFAULT_Q_S)
+    return p
+
+
 # ══════════════════════════════════════════════════════════════════════════════
-#  OCP builder
+#  OCP builder  (gains are SYMBOLIC — read from model.p at runtime)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def create_mpcc_ocp_description(
+def create_mpcc_ocp_description_tunable(
     x0, N_horizon, t_horizon, s_max,
     gamma_pos, gamma_vel, gamma_quat,
 ) -> AcadosOcp:
-    """Create strict MPCC OCP with symbolic trajectory interpolation.
+    """Build the MPCC OCP with symbolic cost weights as runtime parameters."""
 
-    The reference sd(θ), tangent(θ), qd(θ) are CasADi functions of the
-    state θ=x[13].  The solver differentiates through θ→reference→error,
-    which makes v_θ truly optimisable.
-    """
     ocp = AcadosOcp()
     model, _, _, _ = f_system_model_mpcc()
+
+    # ── Declare runtime parameters p ∈ ℝ¹⁷ ──────────────────────────────
+    p_sym = MX.sym('p', N_PARAMS)
+    model.p = p_sym
     ocp.model = model
 
     ocp.solver_options.N_horizon = N_horizon
 
-    # Weights — one independent scalar per axis
-    Q_q     = np.diag(DEFAULT_Q_Q)
-    Q_el    = np.diag(DEFAULT_Q_EL)           # 3×3 diagonal: lag error per axis
-    Q_ec    = np.diag(DEFAULT_Q_EC)
-    U_mat   = np.diag(DEFAULT_U_MAT)
-    Q_omega = np.diag(DEFAULT_Q_OMEGA)
-    Q_s     = DEFAULT_Q_S
+    # ── Extract symbolic weight matrices from p ─────────────────────────
+    Q_ec_diag    = p_sym[0:3]       # [3]
+    Q_el_diag    = p_sym[3:6]       # [3]
+    Q_q_diag     = p_sym[6:9]       # [3]
+    U_mat_diag   = p_sym[9:13]      # [4]
+    Q_omega_diag = p_sym[13:16]     # [3]
+    Q_s_sym      = p_sym[16]        # scalar
 
-    T_hover = MASS * 9.81                     # hover thrust [N] ≈ 9.81
+    # Build diagonal matrices symbolically
+    Q_ec    = casadi_diag(Q_ec_diag)       # 3×3
+    Q_el    = casadi_diag(Q_el_diag)       # 3×3
+    Q_q     = casadi_diag(Q_q_diag)        # 3×3
+    U_mat   = casadi_diag(U_mat_diag)      # 4×4
+    Q_omega = casadi_diag(Q_omega_diag)    # 3×3
+
+    T_hover = MASS * 9.81
 
     ocp.cost.cost_type   = "EXTERNAL"
     ocp.cost.cost_type_e = "EXTERNAL"
 
     # ── Symbolic reference from θ ────────────────────────────────────────
     theta_state = model.x[13]
-    sd      = gamma_pos(theta_state)      # [3]  reference position
-    tangent = gamma_vel(theta_state)      # [3]  unit tangent
-    qd      = gamma_quat(theta_state)     # [4]  desired quaternion
+    sd      = gamma_pos(theta_state)
+    tangent = gamma_vel(theta_state)
+    qd      = gamma_quat(theta_state)
 
     # ── Errors ───────────────────────────────────────────────────────────
     quat_err = quaternion_error(model.x[6:10], qd)
     log_q    = log_cuaternion_casadi(quat_err)
 
-    e_t = sd - model.x[0:3]            # 3-vector: reference minus position
+    e_t = sd - model.x[0:3]
 
-    # Lag error: projection of e_t onto the tangent direction → 3-vector
-    e_lag    = dot(tangent, e_t) * tangent      # (t·e_t)·t  ∈ ℝ³  ∥ tangent
-    # Contouring error (component orthogonal to tangent)
+    # Lag error: projection of e_t onto the tangent → 3-vector
+    e_lag = dot(tangent, e_t) * tangent
+    # Contouring error: component orthogonal to tangent
     P_ec = MX.eye(3) - tangent @ tangent.T
-    ec   = P_ec @ e_t                           # 3-vector ⊥ tangent
+    ec   = P_ec @ e_t
 
     omega   = model.x[10:13]
     v_theta = model.u[4]
+    u_dev   = model.u[0:4]
 
-    # ── Control cost (absolute, same as example) ────────────────────────
-    # Penalise absolute control values. With Q_T small (0.1) the hover
-    # thrust cost ≈ 0.1·9.81² ≈ 9.6 is negligible vs tracking errors.
-    # ── Cost terms ───────────────────────────────────────────────────────
-    control_cost      = model.u[0:4].T @ U_mat @ model.u[0:4]
+    # ── Cost terms (using symbolic p) ────────────────────────────────────
+    control_cost      = u_dev.T @ U_mat @ u_dev
     actitud_cost      = log_q.T @ Q_q @ log_q
     error_contorno    = ec.T @ Q_ec @ ec
-    error_lag         = e_lag.T @ Q_el @ e_lag  # e_lag' Q_el e_lag  ∈ ℝ
+    error_lag         = e_lag.T @ Q_el @ e_lag
     omega_cost        = omega.T @ Q_omega @ omega
-    arc_speed_penalty = Q_s * (DEFAULT_VTHETA_MAX - v_theta)**2
+    arc_speed_penalty = Q_s_sym * (DEFAULT_VTHETA_MAX - v_theta)**2
 
     # ── Stage cost ───────────────────────────────────────────────────────
     ocp.model.cost_expr_ext_cost = (
@@ -139,6 +156,10 @@ def create_mpcc_ocp_description(
     ocp.model.cost_expr_ext_cost_e = (
         error_contorno + error_lag + actitud_cost + omega_cost
     )
+
+    # ── Set default parameter values for all stages ──────────────────────
+    p_default = weights_to_param_vector()
+    ocp.parameter_values = p_default
 
     # ── Constraints ──────────────────────────────────────────────────────
     ocp.constraints.lbu = np.array([
@@ -159,14 +180,15 @@ def create_mpcc_ocp_description(
 
     # ── Solver options ───────────────────────────────────────────────────
     ocp.solver_options.qp_solver        = "FULL_CONDENSING_HPIPM"
-    ocp.solver_options.qp_solver_cond_N = N_horizon // 4
     ocp.solver_options.hessian_approx   = "GAUSS_NEWTON"
     ocp.solver_options.regularize_method = "CONVEXIFY"
     ocp.solver_options.integrator_type  = "ERK"
     ocp.solver_options.nlp_solver_type  = "SQP_RTI"
-    ocp.solver_options.Tsim             = t_horizon / N_horizon
     ocp.solver_options.tol              = 1e-4
     ocp.solver_options.tf               = t_horizon
+    ocp.solver_options.qp_solver_cond_N = N_horizon // 4
+    ocp.solver_options.sim_method_num_stages = 4
+    ocp.solver_options.Tsim             = t_horizon / N_horizon
 
     return ocp
 
@@ -175,11 +197,17 @@ def create_mpcc_ocp_description(
 #  Solver factory
 # ══════════════════════════════════════════════════════════════════════════════
 
-def build_mpcc_solver(x0, N_prediction, t_prediction, s_max,
-                      gamma_pos, gamma_vel, gamma_quat,
-                      use_cython=True):
-    """Create, code-generate, compile and return the MPCC solver."""
-    ocp = create_mpcc_ocp_description(
+def build_mpcc_solver_tunable(x0, N_prediction, t_prediction, s_max,
+                              gamma_pos, gamma_vel, gamma_quat,
+                              use_cython=True):
+    """Create, compile and return the tunable MPCC solver.
+
+    Compiles ONCE.  After that, change gains via:
+        p_vec = weights_to_param_vector(my_weights)
+        for stage in range(N+1):
+            solver.set(stage, "p", p_vec)
+    """
+    ocp = create_mpcc_ocp_description_tunable(
         x0, N_prediction, t_prediction, s_max,
         gamma_pos, gamma_vel, gamma_quat,
     )

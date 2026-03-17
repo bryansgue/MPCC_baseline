@@ -8,7 +8,6 @@ Builds an AcadosOcp with:
 """
 
 import numpy as np
-from casadi import MX
 from acados_template import AcadosOcp, AcadosOcpSolver
 
 from models.quadrotor_model import f_system_model
@@ -41,12 +40,6 @@ def create_ocp_solver_description(
     x0,
     N_horizon,
     t_horizon,
-    Q_diag=None,
-    K_diag=None,
-    R_diag=None,
-    T_max=DEFAULT_T_MAX,
-    T_min=DEFAULT_T_MIN,
-    tau_max=DEFAULT_TAU_MAX,
 ) -> AcadosOcp:
     """Create the acados OCP description.
 
@@ -55,24 +48,11 @@ def create_ocp_solver_description(
     x0        : ndarray (13,)  – initial state
     N_horizon : int            – prediction steps
     t_horizon : float          – prediction time [s]
-    Q_diag    : list[3]        – position weights  (default [25, 25, 30])
-    K_diag    : list[3]        – orientation weights (default [12, 12, 12])
-    R_diag    : list[4]        – control weights    (default [1, 800, 800, 800])
-    T_max     : float          – max thrust [N]
-    T_min     : float          – min thrust [N]
-    tau_max   : float          – max torque per axis [N·m]
 
     Returns
     -------
     ocp : AcadosOcp
     """
-    if Q_diag is None:
-        Q_diag = DEFAULT_Q
-    if K_diag is None:
-        K_diag = DEFAULT_K
-    if R_diag is None:
-        R_diag = DEFAULT_R
-
     ocp = AcadosOcp()
 
     model, f_system, f_x, g_x = f_system_model()
@@ -86,21 +66,9 @@ def create_ocp_solver_description(
     ocp.solver_options.N_horizon = N_horizon
 
     # ── Cost matrices ─────────────────────────────────────────────────────
-    Q_mat = MX.zeros(3, 3)
-    Q_mat[0, 0] = Q_diag[0]
-    Q_mat[1, 1] = Q_diag[1]
-    Q_mat[2, 2] = Q_diag[2]
-
-    K_mat = MX.zeros(3, 3)
-    K_mat[0, 0] = K_diag[0]
-    K_mat[1, 1] = K_diag[1]
-    K_mat[2, 2] = K_diag[2]
-
-    R_mat = MX.zeros(4, 4)
-    R_mat[0, 0] = R_diag[0]
-    R_mat[1, 1] = R_diag[1]
-    R_mat[2, 2] = R_diag[2]
-    R_mat[3, 3] = R_diag[3]
+    Q_mat = np.diag(DEFAULT_Q)
+    K_mat = np.diag(DEFAULT_K)
+    R_mat = np.diag(DEFAULT_R)
 
     # ── External cost ─────────────────────────────────────────────────────
     ocp.parameter_values = np.zeros(np_param)
@@ -124,8 +92,8 @@ def create_ocp_solver_description(
     )
 
     # ── Control constraints (box) ─────────────────────────────────────────
-    ocp.constraints.lbu = np.array([T_min, -tau_max, -tau_max, -tau_max])
-    ocp.constraints.ubu = np.array([T_max,  tau_max,  tau_max,  tau_max])
+    ocp.constraints.lbu = np.array([DEFAULT_T_MIN, -DEFAULT_TAU_MAX, -DEFAULT_TAU_MAX, -DEFAULT_TAU_MAX])
+    ocp.constraints.ubu = np.array([DEFAULT_T_MAX,  DEFAULT_TAU_MAX,  DEFAULT_TAU_MAX,  DEFAULT_TAU_MAX])
     ocp.constraints.idxbu = np.array([0, 1, 2, 3])
 
     # ── Initial state constraint ──────────────────────────────────────────
@@ -146,7 +114,7 @@ def create_ocp_solver_description(
 #  Solver factory
 # ──────────────────────────────────────────────────────────────────────────────
 
-def build_ocp_solver(x0, N_prediction, t_prediction, use_cython=True, **cost_kwargs):
+def build_ocp_solver(x0, N_prediction, t_prediction, use_cython=True):
     """Create, code-generate, compile and return an acados OCP solver.
 
     Parameters
@@ -155,7 +123,6 @@ def build_ocp_solver(x0, N_prediction, t_prediction, use_cython=True, **cost_kwa
     N_prediction  : int
     t_prediction  : float  [s]
     use_cython    : bool   – compile Cython solver (faster calls)
-    **cost_kwargs : forwarded to create_ocp_solver_description
 
     Returns
     -------
@@ -165,7 +132,7 @@ def build_ocp_solver(x0, N_prediction, t_prediction, use_cython=True, **cost_kwa
     f_system          : casadi.Function
     """
     model, f_system, f_x, g_x = f_system_model()
-    ocp = create_ocp_solver_description(x0, N_prediction, t_prediction, **cost_kwargs)
+    ocp = create_ocp_solver_description(x0, N_prediction, t_prediction)
 
     solver_json = 'acados_ocp_' + model.name + '.json'
 
