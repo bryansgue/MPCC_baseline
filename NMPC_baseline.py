@@ -13,12 +13,12 @@ import time as time_module
 from scipy.spatial.transform import Rotation as R
 
 # ── Project modules ──────────────────────────────────────────────────────────
-from utils.quaternion_utils import euler_to_quaternion, Euler_p
-from models.quadrotor_model import f_system_model, f_d
+from utils.numpy_utils import euler_to_quaternion, euler_dot as Euler_p, rk4_step_quadrotor
+from models.quadrotor_model import f_system_model
 from ocp.nmpc_controller import build_ocp_solver
 from graficas import (
     plot_pose, plot_error, plot_time, plot_control,
-    plot_vel_lineal, plot_vel_angular, plot_CBF, plot_timing,
+    plot_vel_lineal, plot_vel_angular, plot_timing,
 )
 
 
@@ -100,7 +100,6 @@ def main():
 
     # ── Storage vectors ──────────────────────────────────────────────────
     delta_t   = np.zeros((1, N_sim), dtype=np.double)
-    CBF_value = np.zeros((1, N_sim), dtype=np.double)
     t_sample  = t_s * np.ones((1, N_sim), dtype=np.double)
     t_solver  = np.zeros((1, N_sim), dtype=np.double)
     t_loop    = np.zeros((1, N_sim), dtype=np.double)
@@ -198,7 +197,7 @@ def main():
         send_velocity_control(u_control[:, k])
 
         # ── System evolution ─────────────────────────────────────────────
-        x[:, k + 1] = f_d(x[:, k], u_control[:, k], t_s, f)
+        x[:, k + 1] = rk4_step_quadrotor(x[:, k], u_control[:, k], t_s, f)
         send_full_state_to_sim(x[:, k + 1])
 
         # ── Rate control ─────────────────────────────────────────────────
@@ -228,9 +227,6 @@ def main():
 
     fig4 = plot_vel_angular(x[10:13, :], t)
     fig4.savefig("4_vel_angular.png"); print("✓ Saved 4_vel_angular.png")
-
-    fig5 = plot_CBF(CBF_value, t)
-    fig5.savefig("5_CBF.png");  print("✓ Saved 5_CBF.png")
 
     fig2 = plot_control(u_control, t)
     fig2.savefig("2_control_actions.png"); print("✓ Saved 2_control_actions.png")

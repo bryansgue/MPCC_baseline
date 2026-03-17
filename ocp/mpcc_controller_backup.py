@@ -32,8 +32,11 @@ from models.quadrotor_model import (
     f_system_model,
     MASS, G, JXX, JYY, JZZ,
 )
-from utils.quaternion_utils import (
-    quaternion_error, log_cuaternion_casadi, QuatToRot, quat_p,
+from utils.casadi_utils import (
+    quat_error_casadi as quaternion_error,
+    quat_log_casadi as log_cuaternion_casadi,
+    quat_to_rot_casadi as QuatToRot,
+    quat_kinematics_casadi as quat_p,
 )
 
 

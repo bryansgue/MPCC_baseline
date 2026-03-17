@@ -34,10 +34,10 @@
 #include "acados_c/sim_interface.h"
 #include "acados_c/external_function_interface.h"
 
-#define DRONE_ODE_COMPLETE_NX     14
+#define DRONE_ODE_COMPLETE_NX     13
 #define DRONE_ODE_COMPLETE_NZ     0
-#define DRONE_ODE_COMPLETE_NU     5
-#define DRONE_ODE_COMPLETE_NP     7
+#define DRONE_ODE_COMPLETE_NU     4
+#define DRONE_ODE_COMPLETE_NP     17
 
 #ifdef __cplusplus
 extern "C" {

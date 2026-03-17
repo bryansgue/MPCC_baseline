@@ -12,7 +12,7 @@ from casadi import MX
 from acados_template import AcadosOcp, AcadosOcpSolver
 
 from models.quadrotor_model import f_system_model
-from utils.quaternion_utils import quaternion_error, log_cuaternion_casadi
+from utils.casadi_utils import quat_error_casadi as quaternion_error, quat_log_casadi as log_cuaternion_casadi
 
 
 # ──────────────────────────────────────────────────────────────────────────────

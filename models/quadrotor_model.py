@@ -5,7 +5,7 @@ State  x ∈ ℝ¹³ = [p(3), v(3), q(4), ω(3)]
 Input  u ∈ ℝ⁴  = [T, τx, τy, τz]
 
 Returns an AcadosModel together with CasADi functions for
-simulation (f_system) and CBF analysis (f_x, g_x).
+simulation (f_system) and control analysis (f_x, g_x).
 """
 
 from acados_template import AcadosModel
@@ -15,7 +15,7 @@ from casadi import (
 )
 import numpy as np
 
-from utils.quaternion_utils import QuatToRot, quat_p
+from utils.casadi_utils import quat_to_rot_casadi as QuatToRot, quat_kinematics_casadi as quat_p
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ def f_system_model():
 
     f_expl = vertcat(p_p, v_p, q_dot, w_p)
 
-    # ── Drift & input-matrix functions (for CBF / Lyapunov) ──────────────
+    # ── Drift & input-matrix functions (for control analysis) ──────────
     u_zero = MX.zeros(u.shape[0], 1)
     f0_expr = substitute(f_expl, u, u_zero)
 
@@ -126,29 +126,3 @@ def f_system_model():
     model.p    = p_param
 
     return model, f_system, f_x, g_x
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  RK4 discrete-time integrator
-# ──────────────────────────────────────────────────────────────────────────────
-
-def f_d(x, u, ts, f_sys):
-    """One-step RK4 integration.
-
-    Parameters
-    ----------
-    x     : ndarray (13,)  – current state
-    u     : ndarray (4,)   – control input
-    ts    : float          – sampling time [s]
-    f_sys : casadi.Function(x, u) → ẋ
-
-    Returns
-    -------
-    x_next : ndarray (13,)
-    """
-    k1 = f_sys(x, u)
-    k2 = f_sys(x + (ts / 2) * k1, u)
-    k3 = f_sys(x + (ts / 2) * k2, u)
-    k4 = f_sys(x + ts * k3, u)
-    x_next = x + (ts / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
-    return np.array(x_next[:, 0]).reshape((13,))

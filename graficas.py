@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.patches as patches
-plt.rc('text', usetex = True)
+plt.rc('text', usetex=False)
 def fancy_plots_2():
     # Define parameters fancy plot
     pts_per_inch = 72.27
@@ -39,7 +39,7 @@ def fancy_plots_2():
             # Bookman, Computer Modern Roman
             # 'font.serif': ['Times'],
             'ps.usedistiller': 'xpdf',
-            'text.usetex': True,
+            'text.usetex': False,
             'figure.figsize': fig_size,
             # include here any neede package for latex
             'text.latex.preamble': [r'\usepackage{amsmath}',
@@ -95,7 +95,7 @@ def fancy_plot():
             # Bookman, Computer Modern Roman
             # 'font.serif': ['Times'],
             'ps.usedistiller': 'xpdf',
-            'text.usetex': True,
+            'text.usetex': False,
             'figure.figsize': fig_size,
             # include here any neede package for latex
             'text.latex.preamble': [r'\usepackage{amsmath}',
@@ -236,52 +236,62 @@ def plot_CBF(value, t):
     
     return fig
 
-def plot_vel_norm(value, value_ref, t):
-    fig, ax = fancy_plot()
-    
-    colors = ['#BB5651', '#69BB51']  # Add color for psi
-    labels = [r'$x$', r'$y$']
-    
-    for i in range(1):
-        ax.plot(t[0:value.shape[1]], value[i, :],
-                color=colors[i], lw=2, ls="-", label=labels[i])
-        ax.plot(t[0:value.shape[1]], value_ref[i, 0:value.shape[1]],
-                color=colors[i], lw=2, ls="--", label=labels[i] + r'$d$')
-    
 
-    ax.set_ylabel(r"$[CBF_value]$", rotation='vertical')
-    ax.set_xlabel(r"$[t]$", labelpad=5)
-    
-    ax.legend(loc="best", frameon=True, fancybox=True, shadow=False, ncol=2,
-              borderpad=0.5, labelspacing=0.5, handlelength=3, handletextpad=0.1,
-              borderaxespad=0.3, columnspacing=2)
-    
-    ax.grid(color='#949494', linestyle='-.', linewidth=0.5)
-    
-    return fig
+def plot_timing(t_solver, t_loop, t_sample, t):
+    """
+    Grafica el tiempo del solver MPC y del loop completo por iteración.
 
-def plot_distance(value, t):
-    fig, ax = fancy_plot()
-    
-    colors = ['#BB5651']  # Add color for psi
-    labels = [r'$value$']
-    
-    for i in range(1):
-        ax.plot(t[0:value.shape[1]], value[i, :],
-                color=colors[i], lw=2, ls="-", label=labels[i])
-    
-    # Dibujar la línea horizontal en el valor 0.9
-    ax.axhline(y=0.9, color='blue', linestyle='--', linewidth=1.5, label='Threshold = 0.9')
-    
-    ax.set_ylabel(r"$[Distance]$", rotation='vertical')
-    ax.set_xlabel(r"$[t]$", labelpad=5)
-    
-    ax.legend(loc="best", frameon=True, fancybox=True, shadow=False, ncol=2,
-              borderpad=0.5, labelspacing=0.5, handlelength=3, handletextpad=0.1,
-              borderaxespad=0.3, columnspacing=2)
-    
-    ax.grid(color='#949494', linestyle='-.', linewidth=0.5)
-    
+    Parámetros
+    ----------
+    t_solver : ndarray (1, N)  – tiempo exclusivo del solver  [s]
+    t_loop   : ndarray (1, N)  – tiempo total del loop        [s]
+    t_sample : ndarray (1, N)  – sample time nominal          [s]
+    t        : ndarray (M,)    – vector de tiempo global      [s]
+    """
+    import numpy as np
+
+    n = t_solver.shape[1]
+    t_axis = t[:n]
+
+    s_ms  = t_solver[0, :] * 1e3   # [ms]
+    l_ms  = t_loop[0, :]   * 1e3   # [ms]
+    ts_ms = t_sample[0, :] * 1e3   # [ms]
+
+    fig, axes = plt.subplots(2, 1, figsize=(10, 6), sharex=True)
+    fig.subplots_adjust(hspace=0.35)
+
+    # ── Subplot 1: tiempos por iteración ────────────────────────────────────
+    ax1 = axes[0]
+    ax1.plot(t_axis, l_ms,  color='#5189BB', lw=1.5, ls='-',  label=r'Loop total')
+    ax1.plot(t_axis, s_ms,  color='#BB5651', lw=1.5, ls='-',  label=r'Solver MPC')
+    ax1.plot(t_axis, ts_ms, color='#333333', lw=1.2, ls='--', label=r'$t_s$ nominal')
+    ax1.fill_between(t_axis, s_ms, alpha=0.15, color='#BB5651')
+    ax1.set_ylabel(r'Tiempo [ms]')
+    ax1.set_title(r'Tiempo de cómputo por iteración')
+    ax1.legend(loc='upper right', frameon=True, fancybox=True, ncol=3,
+               borderpad=0.4, labelspacing=0.4, handlelength=2)
+    ax1.grid(color='#949494', linestyle='-.', linewidth=0.5)
+
+    # ── Subplot 2: histograma de distribución ────────────────────────────────
+    ax2 = axes[1]
+    bins = max(30, n // 50)
+    ax2.hist(s_ms, bins=bins, color='#BB5651', alpha=0.65,
+             edgecolor='white', linewidth=0.4, label='Solver MPC')
+    ax2.hist(l_ms, bins=bins, color='#5189BB', alpha=0.55,
+             edgecolor='white', linewidth=0.4, label='Loop total')
+    ax2.axvline(np.mean(s_ms), color='#BB5651', lw=2, ls='--',
+                label=f'Media solver  {np.mean(s_ms):.2f} ms')
+    ax2.axvline(np.mean(l_ms), color='#5189BB', lw=2, ls='--',
+                label=f'Media loop    {np.mean(l_ms):.2f} ms')
+    ax2.axvline(ts_ms[0],      color='#333333', lw=1.5, ls=':',
+                label=f'$t_s$ nominal  {ts_ms[0]:.2f} ms')
+    ax2.set_xlabel(r'Tiempo [ms]')
+    ax2.set_ylabel(r'Frecuencia')
+    ax2.set_title(r'Histograma de tiempos de cómputo')
+    ax2.legend(loc='upper right', frameon=True, fancybox=True, ncol=2,
+               borderpad=0.4, labelspacing=0.4, handlelength=2)
+    ax2.grid(color='#949494', linestyle='-.', linewidth=0.5)
+
     return fig
 
 def plot_time(ts, delta_t, t):
@@ -307,54 +317,4 @@ def plot_time(ts, delta_t, t):
     
     ax.grid(color='#949494', linestyle='-.', linewidth=0.5)
     
-    return fig
-
-
-def plot_progress_velocity(v_theta, v_real, theta, t):
-    """Plot v_θ (solver input) vs v_real (drone projection) and θ progress.
-
-    Parameters
-    ----------
-    v_theta : ndarray (1, N)  – progress velocity from solver
-    v_real  : ndarray (1, N)  – real progress speed (tangent · v)
-    theta   : ndarray (1, N+1) – arc-length state θ
-    t       : ndarray          – time vector
-    """
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(10, 10), sharex=True)
-
-    N = v_theta.shape[1]
-    t_plot = t[0:N]
-
-    # ── Top: v_θ vs v_real ───────────────────────────────────────────────
-    ax1.plot(t_plot, v_theta[0, :], color='#BB5651', lw=2, ls="-",
-             label=r'$v_{\theta}$ (solver input)')
-    ax1.plot(t_plot, v_real[0, :], color='#5189BB', lw=2, ls="-",
-             label=r'$v_{real} = \mathbf{t}^T \mathbf{v}$')
-    ax1.set_ylabel(r"Velocity $[\mathrm{m/s}]$")
-    ax1.legend(loc="best", frameon=True, fancybox=True, shadow=False)
-    ax1.grid(color='#949494', linestyle='-.', linewidth=0.5)
-    ax1.set_title(r'Progress velocity: $v_{\theta}$ vs real drone speed along path')
-
-    # ── Middle: ratio v_real / v_θ ───────────────────────────────────────
-    ratio = v_real[0, :] / (v_theta[0, :] + 1e-8)
-    ax2.plot(t_plot, ratio, color='#69BB51', lw=2, ls="-",
-             label=r'$v_{real} / v_{\theta}$')
-    ax2.axhline(y=1.0, color='#333333', linestyle='--', linewidth=1.0,
-                label='Ideal ratio = 1')
-    ax2.set_ylabel(r"Ratio")
-    ax2.set_ylim([-0.5, 2.5])
-    ax2.legend(loc="best", frameon=True, fancybox=True, shadow=False)
-    ax2.grid(color='#949494', linestyle='-.', linewidth=0.5)
-
-    # ── Bottom: θ progress ───────────────────────────────────────────────
-    # theta has shape (1, N+1); plot only first N points aligned with t_plot
-    theta_plot = theta[0, :N]
-    ax3.plot(t_plot, theta_plot, color='#BB5651', lw=2, ls="-",
-             label=r'$\theta(t)$')
-    ax3.set_ylabel(r"$\theta$ $[\mathrm{m}]$")
-    ax3.set_xlabel(r"Time $[\mathrm{s}]$")
-    ax3.legend(loc="best", frameon=True, fancybox=True, shadow=False)
-    ax3.grid(color='#949494', linestyle='-.', linewidth=0.5)
-
-    fig.tight_layout()
     return fig

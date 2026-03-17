@@ -17,24 +17,26 @@ Uses the modular project structure:
 import numpy as np
 import time
 import time as time_module
-import math
 import os
-from scipy.interpolate import CubicSpline
-from scipy.integrate import quad
-from scipy.optimize import bisect
 from scipy.io import savemat
 
 # ── Project modules ──────────────────────────────────────────────────────────
-from utils.quaternion_utils import euler_to_quaternion, Euler_p
-from ocp.mpcc_controller import (
-    build_mpcc_solver,
-    create_casadi_position_interpolator,
-    create_casadi_tangent_interpolator,
-    create_casadi_quat_interpolator,
+from utils.numpy_utils import (
+    euler_to_quaternion,
+    build_arc_length_parameterisation,
+    build_waypoints,
+    mpcc_errors,
+    rk4_step_mpcc,
 )
+from utils.casadi_utils import (
+    create_position_interpolator_casadi as create_casadi_position_interpolator,
+    create_tangent_interpolator_casadi  as create_casadi_tangent_interpolator,
+    create_quat_interpolator_casadi     as create_casadi_quat_interpolator,
+)
+from ocp.mpcc_controller import build_mpcc_solver
 from graficas import (
     plot_pose, plot_error, plot_time, plot_control,
-    plot_vel_lineal, plot_vel_angular, plot_CBF,
+    plot_vel_lineal, plot_vel_angular,
     plot_progress_velocity,
 )
 
@@ -44,11 +46,6 @@ from graficas import (
 # ═══════════════════════════════════════════════════════════════════════════════
 
 VALUE  = 10
-VALUEB = 7
-
-UAV_R      = 0.15
-MARGEN     = 0.1
-OBSMOVIL_R = 0.4
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -64,118 +61,6 @@ def trayectoria(t):
     yd_p = lambda t: 7 * v * 0.08 * np.cos(v * 0.08 * t)
     zd_p = lambda t: 1.5 * v * 0.08 * np.cos(v * 0.08 * t)
     return xd, yd, zd, xd_p, yd_p, zd_p
-
-
-def trayectoriaB(t):
-    v = VALUEB
-    xd   = lambda t: 7 * np.sin(-v * 0.04 * t) + 3
-    yd   = lambda t: 7 * np.sin(-v * 0.08 * t)
-    zd   = lambda t: 1.5 * np.sin(-v * 0.08 * t) + 6
-    xd_p = lambda t: -7 * v * 0.04 * np.cos(-v * 0.04 * t)
-    yd_p = lambda t: -7 * v * 0.08 * np.cos(-v * 0.08 * t)
-    zd_p = lambda t: -1.5 * v * 0.08 * np.cos(-v * 0.08 * t)
-    return xd, yd, zd, xd_p, yd_p, zd_p
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Arc-length parameterisation
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def calculate_positions_and_arc_length(xd, yd, zd, xd_p, yd_p, zd_p, t_range, t_max):
-    r       = lambda t: np.array([xd(t), yd(t), zd(t)])
-    r_prime = lambda t: np.array([xd_p(t), yd_p(t), zd_p(t)])
-
-    def integrand(t):
-        return np.linalg.norm(r_prime(t))
-
-    def arc_length(tk, t0=0):
-        length, _ = quad(integrand, t0, tk, limit=100)
-        return length
-
-    positions   = []
-    arc_lengths = []
-    for tk in t_range:
-        arc_lengths.append(arc_length(tk))
-        positions.append(r(tk))
-
-    arc_lengths = np.array(arc_lengths)
-    positions   = np.array(positions).T  # (3, N)
-
-    spline_t = CubicSpline(arc_lengths, t_range)
-    spline_x = CubicSpline(t_range, positions[0, :])
-    spline_y = CubicSpline(t_range, positions[1, :])
-    spline_z = CubicSpline(t_range, positions[2, :])
-
-    total_arc_length = arc_lengths[-1]
-
-    def position_by_arc_length(s):
-        """Evaluate path position at arc-length s (clamped to valid range)."""
-        s = np.clip(s, arc_lengths[0], arc_lengths[-1])
-        te = spline_t(s)
-        return np.array([spline_x(te), spline_y(te), spline_z(te)])
-
-    def tangent_by_arc_length(s, ds=1e-4):
-        """Evaluate unit tangent at arc-length s via finite differences."""
-        s = np.clip(s, arc_lengths[0], arc_lengths[-1])
-        s_fwd = np.clip(s + ds, arc_lengths[0], arc_lengths[-1])
-        s_bwd = np.clip(s - ds, arc_lengths[0], arc_lengths[-1])
-        p_fwd = position_by_arc_length(s_fwd)
-        p_bwd = position_by_arc_length(s_bwd)
-        tang  = (p_fwd - p_bwd) / (s_fwd - s_bwd + 1e-10)
-        norm  = np.linalg.norm(tang)
-        if norm > 1e-8:
-            tang /= norm
-        return tang
-
-    return arc_lengths, positions, position_by_arc_length, tangent_by_arc_length, total_arc_length
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  MPCC error computation (NumPy)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def calculate_errors_norm(sd, sd_p, model_x):
-    """Compute contouring / lag errors, total error, and progress velocity."""
-    e_t = sd - model_x[0:3]
-    tangent = sd_p
-
-    # Lag error
-    el = np.dot(tangent, e_t) * tangent
-
-    # Contouring error
-    I = np.eye(3)
-    P_ec = I - np.outer(tangent, tangent)
-    ec   = P_ec @ e_t
-
-    error_total = ec + el
-
-    return ec, el, error_total
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-#  RK4 integrator for the augmented system (14 states, 5 controls)
-# ──────────────────────────────────────────────────────────────────────────────
-
-def f_d_mpcc(x, u, ts, f_sys):
-    """One-step RK4 integration for the augmented MPCC system.
-
-    Parameters
-    ----------
-    x     : ndarray (14,)  – [p, v, q, ω, θ]
-    u     : ndarray (5,)   – [T, τx, τy, τz, v_θ]
-    ts    : float          – sampling time [s]
-    f_sys : casadi.Function(x14, u5) → ẋ14
-
-    Returns
-    -------
-    x_next : ndarray (14,)
-    """
-    k1 = f_sys(x, u)
-    k2 = f_sys(x + (ts / 2) * k1, u)
-    k3 = f_sys(x + (ts / 2) * k2, u)
-    k4 = f_sys(x + ts * k3, u)
-    x_next = x + (ts / 6) * (k1 + 2 * k2 + 2 * k3 + k4)
-    return np.array(x_next[:, 0]).reshape((14,))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -198,22 +83,16 @@ def main():
 
     # ── Trajectory A (UAV path) ──────────────────────────────────────────
     xd, yd, zd, xd_p, yd_p, zd_p = trayectoria(t)
-    xd_obs1, yd_obs1, zd_obs1, _, _, _ = trayectoriaB(t)
 
-    # Arc-length parameterisation  (now also returns tangent_by_arc_length)
+    # Arc-length parameterisation — delegates to utils.numpy_utils
     t_finer = np.linspace(0, t_final, len(t))
     arc_lengths, pos_ref, position_by_arc_length, tangent_by_arc_length, \
-        total_arc_length = \
-        calculate_positions_and_arc_length(xd, yd, zd, xd_p, yd_p, zd_p,
-                                           t_finer, t_max=t_final)
-    s_max = total_arc_length
+        s_max = build_arc_length_parameterisation(
+            xd, yd, zd, xd_p, yd_p, zd_p, t_finer)
     print(f"[ARC]  Total arc length = {s_max:.3f} m")
 
     # ── Storage vectors ──────────────────────────────────────────────────
     delta_t        = np.zeros((1, N_sim), dtype=np.double)
-    h_CBF_1        = np.zeros((1, N_sim), dtype=np.double)
-    h_CBF_2        = np.zeros((1, N_sim), dtype=np.double)
-    CLF            = np.zeros((1, N_sim), dtype=np.double)
     e_contorno     = np.zeros((3, N_sim), dtype=np.double)
     e_arrastre     = np.zeros((3, N_sim), dtype=np.double)
     e_total        = np.zeros((3, N_sim), dtype=np.double)
@@ -256,35 +135,17 @@ def main():
     xref[8, :]  = quatd[2, :]     # qy_d
     xref[9, :]  = quatd[3, :]     # qz_d
 
-    # ── Mobile obstacle trajectory ───────────────────────────────────────
-    movil_obs1 = np.zeros((3, t.shape[0]), dtype=np.double)
-    movil_obs1[0, :] = xd_obs1(t)
-    movil_obs1[1, :] = yd_obs1(t)
-    movil_obs1[2, :] = zd_obs1(t)
-
     # ── Control storage (5-dim: T, τx, τy, τz, v_θ) ─────────────────────
     u_control = np.zeros((5, N_sim), dtype=np.double)
 
     # ── Create CasADi trajectory interpolation  (θ → reference) ──────────
-    #    Discretise the arc-length into waypoints, then build piecewise-linear
-    #    CasADi functions so the solver can differentiate through θ.
-    N_WAYPOINTS = 30                # 200 → max error < 6 cm, ~10 ms solver
-    s_wp = np.linspace(0, s_max, N_WAYPOINTS)
-    pos_wp  = np.zeros((3, N_WAYPOINTS))
-    tang_wp = np.zeros((3, N_WAYPOINTS))
-    quat_wp = np.zeros((4, N_WAYPOINTS))
-
-    for i, sv in enumerate(s_wp):
-        pos_wp[:, i]  = position_by_arc_length(sv)
-        tang_wp[:, i] = tangent_by_arc_length(sv)
-        # Quaternion from yaw of tangent
-        psi_i = np.arctan2(tang_wp[1, i], tang_wp[0, i])
-        quat_wp[:, i] = euler_to_quaternion(0, 0, psi_i)
-
-    # Correct quaternion hemisphere (keep dot(q_i, q_{i-1}) > 0)
-    for i in range(1, N_WAYPOINTS):
-        if np.dot(quat_wp[:, i], quat_wp[:, i - 1]) < 0:
-            quat_wp[:, i] *= -1
+    #    Delegates to utils.numpy_utils.build_waypoints and
+    #    utils.casadi_utils.create_*_interpolator_casadi.
+    N_WAYPOINTS = 200               # max error < 6 cm, ~10 ms solver
+    s_wp, pos_wp, tang_wp, quat_wp = build_waypoints(
+        s_max, N_WAYPOINTS, position_by_arc_length, tangent_by_arc_length,
+        euler_to_quat_fn=euler_to_quaternion,
+    )
 
     gamma_pos  = create_casadi_position_interpolator(s_wp, pos_wp)
     gamma_vel  = create_casadi_tangent_interpolator(s_wp, tang_wp)
@@ -312,19 +173,6 @@ def main():
 
     print("Initializing simulation...")
 
-    # ── Static obstacle positions ────────────────────────────────────────
-    obs_pos = np.array([
-        [4.8753,  3.6136, 6.7743],
-        [9.8215,  3.0610, 6.6559],
-        [9.9405, -1.8058, 5.6130],
-        [5.0403, -3.9034, 5.1636],
-        [0.5521,  4.5867, 6.9829],
-        [-3.8693, 2.6429, 6.5663],
-        [-3.7215,-3.7539, 5.1956],
-        [0.8770, -4.0461, 5.1330],
-    ])
-    obs_ra = 0.8 * np.array([0.35, 0.40, 0.45, 0.5, 0.45, 0.35, 0.30, 0.25])
-
     # ══════════════════════════════════════════════════════════════════════
     #  Control loop  (strict MPCC: reference computed from predicted θ)
     # ══════════════════════════════════════════════════════════════════════
@@ -340,36 +188,9 @@ def main():
             N_sim = k   # trim storage arrays to actual run length
             break
 
-        # ── Find closest obstacle ────────────────────────────────────────
-        distances   = np.linalg.norm(obs_pos - x[0:3, k], axis=1)
-        idx_closest = np.argmin(distances)
-
-        obs_x_c = obs_pos[idx_closest, 0]
-        obs_y_c = obs_pos[idx_closest, 1]
-        obs_z_c = obs_pos[idx_closest, 2]
-        obs_r_c = obs_ra[idx_closest]
-
         # ── Set initial state (14-dim) ───────────────────────────────────
         acados_ocp_solver.set(0, "lbx", x[:, k])
         acados_ocp_solver.set(0, "ubx", x[:, k])
-
-        # ── Evaluate CBF values ──────────────────────────────────────────
-        obst_static = np.array([obs_x_c, obs_y_c, obs_z_c])
-        obst_movil  = movil_obs1[:3, k]
-
-        h_CBF_1[:, k] = np.linalg.norm(x[:3, k] - obst_static) - (UAV_R + obs_r_c + MARGEN)
-        h_CBF_2[:, k] = np.linalg.norm(x[:3, k] - obst_movil)  - (UAV_R + OBSMOVIL_R + MARGEN)
-
-        # Obstacle values vector (7 elements)
-        values = [obs_x_c, obs_y_c, obs_z_c, obs_r_c,
-                  movil_obs1[0, k], movil_obs1[1, k], movil_obs1[2, k]]
-
-        # ── Set parameters per shooting node (obstacles only, 7-dim) ──────
-        # Reference is now computed SYMBOLICALLY inside the OCP from θ,
-        # so we only need to pass obstacle data as parameters.
-        p_val = np.array(values)                            # 7-dim
-        for j in range(N_prediction + 1):
-            acados_ocp_solver.set(j, "p", p_val)
 
         # ── Solve ────────────────────────────────────────────────────────
         tic_solver = time.time()
@@ -395,7 +216,7 @@ def main():
         vel_real[:, k] = np.dot(tang_k_now, x[3:6, k])
 
         # ── System evolution (augmented RK4, 14 states) ──────────────────
-        x[:, k + 1] = f_d_mpcc(x[:, k], u_control[:, k], t_s, f)
+        x[:, k + 1] = rk4_step_mpcc(x[:, k], u_control[:, k], t_s, f)
 
         # Clamp θ to valid range
         x[13, k + 1] = np.clip(x[13, k + 1], 0.0, s_max)
@@ -415,7 +236,7 @@ def main():
         sd_k    = position_by_arc_length(theta_k)
         tang_k  = tangent_by_arc_length(theta_k)
         e_contorno[:, k], e_arrastre[:, k], e_total[:, k] = \
-            calculate_errors_norm(sd_k, tang_k, x[0:6, k])
+            mpcc_errors(x[0:3, k], tang_k, sd_k)
 
         # ── Print progress ───────────────────────────────────────────────
         overrun = " ⚠ OVERRUN" if elapsed > t_s else ""
@@ -437,9 +258,6 @@ def main():
     # Trim all storage arrays to actual run length
     x            = x[:, :N_sim + 1]
     u_control    = u_control[:, :N_sim]
-    h_CBF_1      = h_CBF_1[:, :N_sim]
-    h_CBF_2      = h_CBF_2[:, :N_sim]
-    CLF          = CLF[:, :N_sim]
     e_contorno   = e_contorno[:, :N_sim]
     e_arrastre   = e_arrastre[:, :N_sim]
     e_total      = e_total[:, :N_sim]
@@ -469,12 +287,6 @@ def main():
 
     fig4 = plot_vel_angular(x[10:13, :], t_plot)
     fig4.savefig("4_vel_angular.png"); print("✓ Saved 4_vel_angular.png")
-
-    fig5 = plot_CBF(h_CBF_1, t_plot[:N_sim])
-    fig5.savefig("5_CBF.png");  print("✓ Saved 5_CBF.png")
-
-    fig6 = plot_CBF(CLF, t_plot[:N_sim])
-    fig6.savefig("7_CLF.png");  print("✓ Saved 7_CLF.png")
 
     # Plot first 4 control inputs (thrust + torques)
     fig2 = plot_control(u_control[:4, :], t_plot[:N_sim])
@@ -516,23 +328,19 @@ def main():
           f"({x[13, N_sim]/s_max*100:.1f}%)\n")
 
     # ── Save results ─────────────────────────────────────────────────────
-    pwd = "/home/bryansgue/Doctoral_Research/Matlab/Results_MPCC_CLF_CBF"
+    pwd = "/home/bryansgue/Doctoral_Research/Matlab/Results_MPCC"
     if not os.path.exists(pwd) or not os.path.isdir(pwd):
         print(f"La ruta {pwd} no existe. Usando directorio local.")
         pwd = os.getcwd()
 
     experiment_number = 1
-    name_file = f"Results_static_MPCC_CLF_CBF_{experiment_number}.mat"
+    name_file = f"Results_MPCC_baseline_{experiment_number}.mat"
 
     savemat(os.path.join(pwd, name_file), {
         'states': x,
         'T_control': u_control,
-        'CBF_1': h_CBF_1,
-        'CBF_2': h_CBF_2,
-        'CLF': CLF,
         'time': t_plot,
         'ref': xref[:, :N_sim + 1],
-        'obs_movil': movil_obs1[:, :N_sim],
         'e_total': e_total,
         'e_contorno': e_contorno,
         'e_arrastre': e_arrastre,
