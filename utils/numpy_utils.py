@@ -371,6 +371,51 @@ def rk4_step_mpcc(x: np.ndarray, u: np.ndarray,
     return np.array(x_next[:, 0]).reshape((14,))
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  Path geometry
+# ══════════════════════════════════════════════════════════════════════════════
+
+def compute_curvature(position_by_arc, s_max: float,
+                      N_samples: int = 500, ds: float = 1e-3) -> np.ndarray:
+    """Compute curvature κ(s) along an arc-length-parameterised path.
+
+    κ = ‖r''(s)‖  (since r'(s) is unit tangent for arc-length param).
+
+    Parameters
+    ----------
+    position_by_arc : callable (s) → ndarray (3,)
+    s_max           : float          – total arc length
+    N_samples       : int            – number of uniform samples
+    ds              : float          – finite-difference step
+
+    Returns
+    -------
+    curvature : ndarray (N_samples,) – κ at each sample
+    """
+    s_vals = np.linspace(0, s_max, N_samples)
+    curvature = np.zeros(N_samples)
+
+    for i, s in enumerate(s_vals):
+        s_lo = np.clip(s - ds, 0, s_max)
+        s_hi = np.clip(s + ds, 0, s_max)
+        s_mid_lo = np.clip(s - ds / 2, 0, s_max)
+        s_mid_hi = np.clip(s + ds / 2, 0, s_max)
+
+        # First derivatives (tangent approximations)
+        t_lo = (position_by_arc(s_mid_hi) - position_by_arc(s_mid_lo))
+        # Normalise to get "unit tangent" differences
+        h = s_hi - s_lo
+        if h > 1e-10:
+            # Second derivative via finite difference of first derivative
+            p_lo = position_by_arc(s_lo)
+            p_mid = position_by_arc(s)
+            p_hi = position_by_arc(s_hi)
+            r_pp = (p_hi - 2 * p_mid + p_lo) / (ds ** 2)
+            curvature[i] = np.linalg.norm(r_pp)
+
+    return curvature
+
+
 # ── Backward-compatible aliases ───────────────────────────────────────────────
 # These match the old names from quaternion_utils.py so that callers that
 # import from this module still work.

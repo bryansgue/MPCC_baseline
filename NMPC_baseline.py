@@ -16,7 +16,7 @@ from scipy.spatial.transform import Rotation as R
 from utils.numpy_utils import euler_to_quaternion, euler_dot as Euler_p, rk4_step_quadrotor
 from models.quadrotor_model import f_system_model
 from ocp.nmpc_controller import build_ocp_solver
-from graficas import (
+from utils.graficas import (
     plot_pose, plot_error, plot_time, plot_control,
     plot_vel_lineal, plot_vel_angular, plot_timing,
 )

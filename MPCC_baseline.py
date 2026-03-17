@@ -27,6 +27,7 @@ from utils.numpy_utils import (
     build_waypoints,
     mpcc_errors,
     rk4_step_mpcc,
+    compute_curvature,
 )
 from utils.casadi_utils import (
     create_position_interpolator_casadi as create_casadi_position_interpolator,
@@ -34,10 +35,11 @@ from utils.casadi_utils import (
     create_quat_interpolator_casadi     as create_casadi_quat_interpolator,
 )
 from ocp.mpcc_controller import build_mpcc_solver
-from graficas import (
+from utils.graficas import (
     plot_pose, plot_error, plot_time, plot_control,
     plot_vel_lineal, plot_vel_angular,
-    plot_progress_velocity,
+    plot_progress_velocity, plot_velocity_analysis,
+    plot_3d_trajectory, plot_timing,
 )
 
 
@@ -45,7 +47,11 @@ from graficas import (
 #  Constants
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VALUE  = 10
+VALUE  = 5
+
+# Manual arc-length limit (set to None to use the full curve, or a float to
+# stop early, e.g. S_MAX_MANUAL = 80.0 to only track the first 80 m).
+S_MAX_MANUAL = None   # None → use full curve  |  float → manual limit
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -87,9 +93,17 @@ def main():
     # Arc-length parameterisation — delegates to utils.numpy_utils
     t_finer = np.linspace(0, t_final, len(t))
     arc_lengths, pos_ref, position_by_arc_length, tangent_by_arc_length, \
-        s_max = build_arc_length_parameterisation(
+        s_max_full = build_arc_length_parameterisation(
             xd, yd, zd, xd_p, yd_p, zd_p, t_finer)
-    print(f"[ARC]  Total arc length = {s_max:.3f} m")
+
+    # ── Optional manual arc-length limit ─────────────────────────────────
+    if S_MAX_MANUAL is not None and S_MAX_MANUAL < s_max_full:
+        s_max = float(S_MAX_MANUAL)
+        print(f"[ARC]  Total arc length = {s_max_full:.3f} m  →  "
+              f"LIMITED to s_max = {s_max:.3f} m")
+    else:
+        s_max = s_max_full
+        print(f"[ARC]  Total arc length = {s_max:.3f} m")
 
     # ── Storage vectors ──────────────────────────────────────────────────
     delta_t        = np.zeros((1, N_sim), dtype=np.double)
@@ -98,6 +112,7 @@ def main():
     e_total        = np.zeros((3, N_sim), dtype=np.double)
     vel_progres    = np.zeros((1, N_sim), dtype=np.double)     # v_θ (from solver)
     vel_real       = np.zeros((1, N_sim), dtype=np.double)     # real progress speed (dot(tangent, v))
+    vel_tangent    = np.zeros((1, N_sim), dtype=np.double)     # ‖v(t)‖ actual speed
     theta_history  = np.zeros((1, N_sim + 1), dtype=np.double) # θ state
     t_solver       = np.zeros((1, N_sim), dtype=np.double)
     t_loop         = np.zeros((1, N_sim), dtype=np.double)
@@ -141,7 +156,7 @@ def main():
     # ── Create CasADi trajectory interpolation  (θ → reference) ──────────
     #    Delegates to utils.numpy_utils.build_waypoints and
     #    utils.casadi_utils.create_*_interpolator_casadi.
-    N_WAYPOINTS = 200               # max error < 6 cm, ~10 ms solver
+    N_WAYPOINTS = 30              # max error < 6 cm, ~10 ms solver
     s_wp, pos_wp, tang_wp, quat_wp = build_waypoints(
         s_max, N_WAYPOINTS, position_by_arc_length, tangent_by_arc_length,
         euler_to_quat_fn=euler_to_quaternion,
@@ -213,7 +228,8 @@ def main():
         # Real progress speed = projection of UAV velocity onto tangent
         theta_k_now = np.clip(x[13, k], 0.0, s_max)
         tang_k_now  = tangent_by_arc_length(theta_k_now)
-        vel_real[:, k] = np.dot(tang_k_now, x[3:6, k])
+        vel_real[:, k]    = np.dot(tang_k_now, x[3:6, k])
+        vel_tangent[:, k] = np.linalg.norm(x[3:6, k])       # ‖v‖ actual speed
 
         # ── System evolution (augmented RK4, 14 states) ──────────────────
         x[:, k + 1] = rk4_step_mpcc(x[:, k], u_control[:, k], t_s, f)
@@ -263,6 +279,7 @@ def main():
     e_total      = e_total[:, :N_sim]
     vel_progres  = vel_progres[:, :N_sim]
     vel_real     = vel_real[:, :N_sim]
+    vel_tangent  = vel_tangent[:, :N_sim]
     theta_history= theta_history[:, :N_sim + 1]
     t_solver     = t_solver[:, :N_sim]
     t_loop       = t_loop[:, :N_sim]
@@ -279,8 +296,14 @@ def main():
         xref_theta[0:3, i]  = pos_i
         xref_theta[3:6, i]  = tang_i
 
+    # ── Compute path curvature for analysis plot ─────────────────────────
+    curvature = compute_curvature(position_by_arc_length, s_max, N_samples=500)
+
     fig1 = plot_pose(x[:13, :], xref_theta, t_plot)
     fig1.savefig("1_pose.png");   print("✓ Saved 1_pose.png")
+
+    fig2 = plot_control(u_control[:4, :], t_plot[:N_sim])
+    fig2.savefig("2_control_actions.png"); print("✓ Saved 2_control_actions.png")
 
     fig3 = plot_vel_lineal(x[3:6, :], t_plot)
     fig3.savefig("3_vel_lineal.png");  print("✓ Saved 3_vel_lineal.png")
@@ -288,11 +311,21 @@ def main():
     fig4 = plot_vel_angular(x[10:13, :], t_plot)
     fig4.savefig("4_vel_angular.png"); print("✓ Saved 4_vel_angular.png")
 
-    # Plot first 4 control inputs (thrust + torques)
-    fig2 = plot_control(u_control[:4, :], t_plot[:N_sim])
-    fig2.savefig("2_control_actions.png"); print("✓ Saved 2_control_actions.png")
+    # ── Velocity analysis: v_θ, v_real, ‖v‖, curvature ──────────────────
+    fig5 = plot_velocity_analysis(
+        vel_progres, vel_real, vel_tangent,
+        curvature, theta_history, s_max, t_plot[:N_sim])
+    fig5.savefig("5_velocity_analysis.png", dpi=150)
+    print("✓ Saved 5_velocity_analysis.png")
 
-    # Plot v_θ vs v_real and θ progress
+    # ── 3D trajectory ────────────────────────────────────────────────────
+    fig6 = plot_3d_trajectory(
+        x, pos_ref, s_max=s_max,
+        position_by_arc=position_by_arc_length, N_plot=600)
+    fig6.savefig("6_trajectory_3d.png", dpi=150)
+    print("✓ Saved 6_trajectory_3d.png")
+
+    # ── Progress velocity (simple version) ───────────────────────────────
     fig_vprog = plot_progress_velocity(vel_progres, vel_real, theta_history, t_plot[:N_sim])
     fig_vprog.savefig("8_progress_velocity.png", dpi=150)
     print("✓ Saved 8_progress_velocity.png")
@@ -346,7 +379,9 @@ def main():
         'e_arrastre': e_arrastre,
         'vel_progres': vel_progres,
         'vel_real': vel_real,
+        'vel_tangent': vel_tangent,
         'theta_history': theta_history,
+        's_max': s_max,
     })
     print(f"✓ Results saved to {os.path.join(pwd, name_file)}")
 

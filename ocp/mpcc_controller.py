@@ -1,6 +1,10 @@
 """
 MPCC (Model Predictive Contouring Control) – strict formulation with
-symbolic trajectory interpolation.
+symbolic trajectory interp    # Lag error: projection of e_t onto the tangent direction → 3-vector
+    e_lag    = dot(tangent, e_t) * tangent      # (t·e_t) · t  ∈ ℝ³
+    # Contouring error (component orthogonal to tangent)
+    P_ec = MX.eye(3) - tangent @ tangent.T
+    ec   = P_ec @ e_t                           # 3-vector ⊥ tangenton.
 
 Key MPCC features:
   • θ (arc-length progress) is an optimisation STATE   (x[13])
@@ -35,18 +39,19 @@ from utils.casadi_utils import (
 #  Default cost weights
 # ──────────────────────────────────────────────────────────────────────────────
 
-DEFAULT_Q_Q    = [1, 1, 1]                       # Quaternion log error
-DEFAULT_Q_EL   = 5.0                             # Lag error (scalar weight)
-DEFAULT_Q_EC   = [10, 10, 10]                    # Contouring error
-DEFAULT_U_MAT  = [0.1, 250, 250, 250]            # Control effort (deviation from hover)
-DEFAULT_Q_OMEGA = 0.5                            # Angular velocity
-DEFAULT_Q_S    = 0.3                             # Progress: Q_s*(v_max-v_θ)²
+DEFAULT_Q_Q    = [5.0, 5.0, 5.0]               # Quaternion log error  [roll, pitch, yaw]
+DEFAULT_Q_EL   = [5.0, 5.0, 5.0]               # Lag error             [ex, ey, ez]
+DEFAULT_Q_EC   = [25.0, 25.0, 25.0]            # Contouring error      [ex, ey, ez]
+DEFAULT_U_MAT  = [0.1, 800.0, 800.0, 800.0]   # Control effort        [T, τx, τy, τz]
+DEFAULT_Q_OMEGA = [0.1, 0.1, 0.1]              # Angular velocity      [ωx, ωy, ωz]
+DEFAULT_Q_S    = 0.2                            # Progress: Q_s*(v_max-v_θ)²
 
-DEFAULT_T_MAX      = 2 * 8.5
+G = 9.81
+DEFAULT_T_MAX      = 3 * G
 DEFAULT_T_MIN      = 0.0
-DEFAULT_TAUX_MAX   = 0.025
-DEFAULT_TAUY_MAX   = 0.021
-DEFAULT_TAUZ_MAX   = 0.02
+DEFAULT_TAUX_MAX   = 0.03
+DEFAULT_TAUY_MAX   = 0.03
+DEFAULT_TAUZ_MAX   = 0.03
 DEFAULT_VTHETA_MIN = 0.0
 DEFAULT_VTHETA_MAX = 15.0
 
@@ -71,12 +76,12 @@ def create_mpcc_ocp_description(
 
     ocp.solver_options.N_horizon = N_horizon
 
-    # Weights
+    # Weights — one independent scalar per axis
     Q_q     = np.diag(DEFAULT_Q_Q)
-    Q_el    = DEFAULT_Q_EL                    # scalar: penalises (t·e_t)²
+    Q_el    = np.diag(DEFAULT_Q_EL)           # 3×3 diagonal: lag error per axis
     Q_ec    = np.diag(DEFAULT_Q_EC)
     U_mat   = np.diag(DEFAULT_U_MAT)
-    Q_omega = DEFAULT_Q_OMEGA
+    Q_omega = np.diag(DEFAULT_Q_OMEGA)
     Q_s     = DEFAULT_Q_S
 
     T_hover = MASS * 9.81                     # hover thrust [N] ≈ 9.81
@@ -96,25 +101,23 @@ def create_mpcc_ocp_description(
 
     e_t = sd - model.x[0:3]            # 3-vector: reference minus position
 
-    # Lag error (scalar projection onto tangent, then squared)
-    e_lag    = dot(tangent, e_t)        # scalar  ∈ ℝ
+    # Lag error: projection of e_t onto the tangent direction → 3-vector
+    e_lag    = dot(tangent, e_t) * tangent      # (t·e_t)·t  ∈ ℝ³  ∥ tangent
     # Contouring error (component orthogonal to tangent)
     P_ec = MX.eye(3) - tangent @ tangent.T
-    ec   = P_ec @ e_t                  # 3-vector ⊥ tangent
+    ec   = P_ec @ e_t                           # 3-vector ⊥ tangent
 
     omega   = model.x[10:13]
     v_theta = model.u[4]
 
     # ── Nominal (hover) control vector — penalise deviation, not absolute ─
-    u_nominal = vertcat(MX(T_hover), MX(0), MX(0), MX(0))
-    u_dev     = model.u[0:4] - u_nominal
-
+    u_dev     = model.u[0:4] 
     # ── Cost terms ───────────────────────────────────────────────────────
     control_cost      = u_dev.T @ U_mat @ u_dev
     actitud_cost      = log_q.T @ Q_q @ log_q
     error_contorno    = ec.T @ Q_ec @ ec
-    error_lag         = Q_el * e_lag**2             # scalar weight × scalar²
-    omega_cost        = Q_omega * (omega.T @ omega)
+    error_lag         = e_lag.T @ Q_el @ e_lag  # e_lag' Q_el e_lag  ∈ ℝ
+    omega_cost        = omega.T @ Q_omega @ omega
     arc_speed_penalty = Q_s * (DEFAULT_VTHETA_MAX - v_theta)**2
 
     # ── Stage cost ───────────────────────────────────────────────────────
