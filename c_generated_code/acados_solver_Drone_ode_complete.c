@@ -410,31 +410,7 @@ void Drone_ode_complete_acados_create_setup_functions(Drone_ode_complete_solver_
 void Drone_ode_complete_acados_create_set_default_parameters(Drone_ode_complete_solver_capsule* capsule)
 {
 
-    const int N = capsule->nlp_solver_plan->N;
-    // initialize parameters to nominal value
-    double* p = calloc(NP, sizeof(double));
-    p[0] = 22.00736091362432;
-    p[1] = 39.52929117895614;
-    p[2] = 41.351252481945046;
-    p[3] = 33.874832397312225;
-    p[4] = 40.30522170732158;
-    p[5] = 34.90225580204642;
-    p[6] = 49.68367341061377;
-    p[7] = 36.49395435837781;
-    p[8] = 16.803648807763942;
-    p[9] = 0.1;
-    p[10] = 550;
-    p[11] = 550;
-    p[12] = 550;
-    p[13] = 0.025650491345221405;
-    p[14] = 3.4126047002592546;
-    p[15] = 6.291153914894247;
-    p[16] = 0.7891639770382975;
-
-    for (int i = 0; i <= N; i++) {
-        Drone_ode_complete_acados_update_params(capsule, i, p, NP);
-    }
-    free(p);
+    // no parameters defined
 
 
     // no global parameters defined
@@ -498,7 +474,17 @@ void Drone_ode_complete_acados_setup_nlp_in(Drone_ode_complete_solver_capsule* c
         cost_scaling[17] = 0.01;
         cost_scaling[18] = 0.01;
         cost_scaling[19] = 0.01;
-        cost_scaling[20] = 1;
+        cost_scaling[20] = 0.01;
+        cost_scaling[21] = 0.01;
+        cost_scaling[22] = 0.01;
+        cost_scaling[23] = 0.01;
+        cost_scaling[24] = 0.01;
+        cost_scaling[25] = 0.01;
+        cost_scaling[26] = 0.01;
+        cost_scaling[27] = 0.01;
+        cost_scaling[28] = 0.01;
+        cost_scaling[29] = 0.01;
+        cost_scaling[30] = 1;
         for (int i = 0; i <= N; i++)
         {
             ocp_nlp_cost_model_set(nlp_config, nlp_dims, nlp_in, i, "scaling", &cost_scaling[i]);
@@ -650,7 +636,7 @@ void Drone_ode_complete_acados_setup_nlp_in(Drone_ode_complete_solver_capsule* c
     double* lubx = calloc(2*NBX, sizeof(double));
     double* lbx = lubx;
     double* ubx = lubx + NBX;
-    ubx[0] = 31.338263185958848;
+    ubx[0] = 62.82735345523335;
 
     for (int i = 1; i < N; i++)
     {
@@ -968,7 +954,7 @@ int Drone_ode_complete_acados_update_params(Drone_ode_complete_solver_capsule* c
 {
     int solver_status = 0;
 
-    int casadi_np = 17;
+    int casadi_np = 0;
     if (casadi_np != np) {
         printf("acados_update_params: trying to set %i parameters for external functions."
             " External function has %i parameters. Exiting.\n", np, casadi_np);
