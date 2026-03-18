@@ -27,8 +27,7 @@ import numpy as np
 from casadi import MX, dot, vertcat
 from acados_template import AcadosOcp, AcadosOcpSolver
 
-from models.quadrotor_model import MASS
-from models.quadrotor_mpcc_model import f_system_model_mpcc
+from models.quadrotor_mpcc_model import f_system_model_mpcc, MASS
 from utils.casadi_utils import (
     quat_error_casadi as quaternion_error,
     quat_log_casadi   as log_cuaternion_casadi,
@@ -47,12 +46,8 @@ DEFAULT_U_MAT   = [0.1, 250.0, 250.0, 250.0]    # Control effort        [T, τx,
 DEFAULT_Q_OMEGA = [0.5, 0.5, 0.5]               # Angular velocity      [ωx, ωy, ωz]
 DEFAULT_Q_S     = 0.3                            # Progress: Q_s*(v_max-v_θ)²
 
-DEFAULT_Q_EC    = [15.28754095737987, 45.14088894570616, 45.1057597918723]
-DEFAULT_Q_EL    = [9.981522233473786, 4.025848920211256, 0.12224481497560617]
-DEFAULT_Q_Q     = [2.307877692394767, 1.1269813915717117, 1.3240809245877352]
-DEFAULT_U_MAT   = [0.015383100319095615, 28.473718721642047, 596.6862751213797, 61.37755986844395]
-DEFAULT_Q_OMEGA = [0.3783929014639194, 0.02224827030993484, 9.95637046382479]
-DEFAULT_Q_S     = 0.5098589879219063
+
+
 
 G = 9.81
 DEFAULT_T_MAX      = 5 * G

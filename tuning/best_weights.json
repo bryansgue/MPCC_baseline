@@ -56,7 +56,7 @@
     "rmse_lag": 0.9057646974106962,
     "mean_effort": 727.9955684737222,
     "path_completed": 0.9996875487170959,
-    "wall_time": 0.6637063026428223
+    "wall_time": 0.7396755218505859
   },
   "objective_info": {
     "type": "mean_mpcc_cost + completion_penalty",

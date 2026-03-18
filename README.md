@@ -25,8 +25,7 @@ MPCC_baseline/
 │   ├── mpcc_controller_tuner.py   # MPCC OCP (runtime parameters)
 │   └── nmpc_controller.py         # NMPC OCP
 ├── models/
-│   ├── quadrotor_model.py         # 13-state dynamics (NMPC)
-│   └── quadrotor_mpcc_model.py    # 14-state dynamics (MPCC + θ)
+│   └── quadrotor_mpcc_model.py    # 14-state dynamics + physical constants
 ├── utils/
 │   ├── numpy_utils.py             # Arc-length, quaternions, RK4
 │   ├── casadi_utils.py            # Symbolic utils (CasADi)

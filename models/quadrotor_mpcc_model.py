@@ -21,7 +21,17 @@ from utils.casadi_utils import (
     quat_to_rot_casadi  as QuatToRot,
     quat_kinematics_casadi as quat_p,
 )
-from models.quadrotor_model import MASS, G, JXX, JYY, JZZ
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  Physical parameters
+# ──────────────────────────────────────────────────────────────────────────────
+
+MASS = 1.0          # [kg]
+G    = 9.81         # [m/s²]
+JXX  = 0.00305587   # [kg·m²]
+JYY  = 0.00159695
+JZZ  = 0.00159687
 
 
 def f_system_model_mpcc():

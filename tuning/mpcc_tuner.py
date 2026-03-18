@@ -149,7 +149,9 @@ def objective(trial) -> float:
     effort    = result['mean_effort']
 
     # ── Objective = MPCC cost + completion penalty ───────────────────────
-    J = mpcc_cost 
+    # W_INCOMPLETE penalises weight vectors that fail to complete the path,
+    # preventing Optuna from preferring trivially low costs from early stops.
+    J = mpcc_cost + W_INCOMPLETE * (1.0 - compl)**2
 
     print(f"  [Trial {trial.number:3d}]  J={J:8.3f}  "
           f"J_mpcc={mpcc_cost:.4f}  "

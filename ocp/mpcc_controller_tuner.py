@@ -21,8 +21,7 @@ import numpy as np
 from casadi import MX, dot, vertcat, diag as casadi_diag
 from acados_template import AcadosOcp, AcadosOcpSolver
 
-from models.quadrotor_model import MASS
-from models.quadrotor_mpcc_model import f_system_model_mpcc
+from models.quadrotor_mpcc_model import f_system_model_mpcc, MASS
 from utils.casadi_utils import (
     quat_error_casadi as quaternion_error,
     quat_log_casadi   as log_cuaternion_casadi,
